@@ -1,0 +1,25 @@
+#!/usr/bin/env python
+
+"""route53-transfer
+
+Usage:
+  route53-transfer [options] load <zone> <file>
+  route53-transfer [options] dump <zone> <file>
+  route53-transfer -h | --help
+  route53-transfer -v | --version
+
+Options:
+  -h --help                               Show this screen.
+  -v --version                            Show the version.
+
+  -I --access-key-id=ACCESS_KEY_ID        AWS access key to use (default: $AWS_ACCESS_KEY_ID)[.
+  -S --secret-key=SECRET_KEY              AWS secret key to use (default: $AWS_SECRET_ACCESS_KEY).
+  -K --secret-key-file=SECRET_KEY_FILE    File containing AWS secret key to use.
+"""
+
+from docopt import docopt
+
+from route53_transfer import __version__, app
+
+params = docopt(__doc__, version='route53-transfer %s' % __version__)
+app.run(params)

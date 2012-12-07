@@ -1,0 +1,9 @@
+*.pyc
+*.egg-info
+/README.md
+/env
+/build
+/target
+/cache
+/dist
+/out
