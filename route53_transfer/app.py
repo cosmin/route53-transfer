@@ -141,7 +141,7 @@ def load(con, zone_name, filename):
 def dump(con, zone_name, filename):
     zone = get_zone(con, zone_name)
     if not zone:
-        exit_with_error("ERROR: Zone <" + params['<zone>'] + "> not found!")
+        exit_with_error("ERROR: Zone <" + zone_name + "> not found!")
 
     if filename == '-':
         fout = sys.stdout
