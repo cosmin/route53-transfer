@@ -20,13 +20,13 @@ Backup the ``example.com`` zone to a ``CSV`` file.
 
 ::
 
-    route53-transfer backup example.com backup.csv
+    route53-transfer dump example.com backup.csv
 
 Use STDOUT instead of a file
 
 ::
 
-    route53-transfer backup example.com -
+    route53-transfer dump example.com -
 
 Restore a zone
 ~~~~~~~~~~~~~~
