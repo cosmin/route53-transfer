@@ -39,8 +39,6 @@ def get_aws_credentials(params):
             secret_key = f.read().strip()
     else:
         secret_key = params.get('--secret-key') or environ.get('AWS_SECRET_ACCESS_KEY')
-    if not (access_key and secret_key):
-        exit_with_error('ERROR: Invalid AWS credentials supplied.')
     return access_key, secret_key
 
 def get_zone(con, zone_name):
