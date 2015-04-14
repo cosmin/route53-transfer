@@ -50,3 +50,17 @@ Dump from one account, load into another.
     route53-transfer --access-key-id=ACCOUNT1 --secret-key=SECRET dump example.com
     route53-transfer --access-key-id=ACCOUNT2 --secret-key=SECRET load example.com
 
+In Python
+~~~~~~~~~
+
+Use the `load` and `dump` functions to move data.
+
+::
+
+    from StringIO import StringIO
+    from route53_transfer import load, dump
+    from boto import route53
+    
+    out = StringIO()
+    con = route53.connect_to_region('universal')
+    dump(con, 'example.com', out)

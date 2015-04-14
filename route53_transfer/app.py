@@ -82,20 +82,15 @@ def group_values(lines):
 
             yield record
 
-def read_lines(filename):
-    if filename == '-':
-        fin = sys.stdin
-    else:
-        fin = open(filename, 'r')
-
-    reader = csv.reader(fin)
+def read_lines(file_in):
+    reader = csv.reader(file_in)
     lines = list(reader)
     if lines[0][0] == 'NAME':
         lines = lines[1:]
     return lines
 
-def read_records(con, zone, filename):
-    return list(group_values(read_lines(filename)))
+def read_records(file_in):
+    return list(group_values(read_lines(file_in)))
 
 def skip_apex_soa_ns(zone, records):
     for record in records:
@@ -107,11 +102,30 @@ def skip_apex_soa_ns(zone, records):
 def comparable(records):
     return {ComparableRecord(record) for record in records}
 
-def load(con, zone_name, filename):
+def get_file(filename, mode):
+    ''' Get a file-like object for a filename and mode.
+    
+        If filename is "-" return one of stdin or stdout.
+    '''
+    if filename == '-':
+        if mode.startswith('r'):
+            return sys.stdin
+        elif mode.startswith('w'):
+            return sys.stdout
+        else:
+            raise ValueError('Unknown mode "{}"'.format(mode))
+    else:
+        return open(filename, mode)
+
+def load(con, zone_name, file_in):
+    ''' Send DNS records from input file to Route 53.
+    
+        Arguments are Route53 connection, zone name, and file open for reading.
+    '''
     zone = get_or_create_zone(con, zone_name)
 
     existing_records = comparable(skip_apex_soa_ns(zone, con.get_all_rrsets(zone['id'])))
-    desired_records = comparable(skip_apex_soa_ns(zone, read_records(con, zone, filename)))
+    desired_records = comparable(skip_apex_soa_ns(zone, read_records(file_in)))
 
     to_delete = existing_records.difference(desired_records)
     to_add = desired_records.difference(existing_records)
@@ -136,15 +150,14 @@ def load(con, zone_name, filename):
         print "No changes."
 
 
-def dump(con, zone_name, filename):
+def dump(con, zone_name, fout):
+    ''' Receive DNS records from Route 53 to output file.
+    
+        Arguments are Route53 connection, zone name, and file open for writing.
+    '''
     zone = get_zone(con, zone_name)
     if not zone:
         exit_with_error("ERROR: Zone <" + zone_name + "> not found!")
-
-    if filename == '-':
-        fout = sys.stdout
-    else:
-        fout = open(filename, 'w')
 
     out = csv.writer(fout)
     out.writerow(['NAME','TYPE','VALUE','TTL','REGION','WEIGHT','SETID'])
@@ -166,8 +179,8 @@ def run(params):
     filename = params['<file>']
 
     if params['dump']:
-        dump(con, zone_name, filename)
+        dump(con, zone_name, get_file(filename, 'w'))
     elif params['load']:
-        load(con, zone_name, filename)
+        load(con, zone_name, get_file(filename, 'r'))
     else:
         return 1
