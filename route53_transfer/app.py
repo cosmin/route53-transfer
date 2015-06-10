@@ -48,7 +48,8 @@ def get_zone(con, zone_name):
         data = {}
         data['id'] = zone_response['GetHostedZoneResponse']['HostedZone']['Id'].replace('/hostedzone/','')
         data['name'] = zone_response['GetHostedZoneResponse']['HostedZone']['Name']
-        data['ns'] = zone_response['GetHostedZoneResponse']['DelegationSet']['NameServers']
+        if 'DelegationSet' in zone_response['GetHostedZoneResponse']:
+            data['ns'] = zone_response['GetHostedZoneResponse']['DelegationSet']['NameServers']
         return data
     else:
         return None
