@@ -2,7 +2,7 @@ import csv, sys
 import itertools
 from os import environ
 from os.path import join
-from boto import route53
+import boto
 from boto.route53.record import Record, ResourceRecordSets
 
 class ComparableRecord(object):
@@ -32,14 +32,6 @@ def exit_with_error(error):
     sys.stderr.write(error)
     sys.exit(1)
 
-def get_aws_credentials(params):
-    access_key=params.get('--access-key-id') or environ.get('AWS_ACCESS_KEY_ID')
-    if params.get('--secret-key-file'):
-        with open(params.get('--secret-key-file')) as f:
-            secret_key = f.read().strip()
-    else:
-        secret_key = params.get('--secret-key') or environ.get('AWS_SECRET_ACCESS_KEY')
-    return access_key, secret_key
 
 def get_zone(con, zone_name):
     zone_response = con.get_hosted_zone_by_name(zone_name)
@@ -174,8 +166,7 @@ def dump(con, zone_name, fout):
     fout.flush()
 
 def run(params):
-    access_key, secret_key = get_aws_credentials(params)
-    con = route53.connect_to_region('universal', aws_access_key_id=access_key, aws_secret_access_key=secret_key)
+    con = boto.connect_route53()
     zone_name = params['<zone>']
     filename = params['<file>']
 

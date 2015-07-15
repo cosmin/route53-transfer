@@ -12,9 +12,6 @@ Options:
   -h --help                               Show this screen.
   -v --version                            Show the version.
 
-  -I --access-key-id=ACCESS_KEY_ID        AWS access key to use (default: $AWS_ACCESS_KEY_ID).
-  -S --secret-key=SECRET_KEY              AWS secret key to use (default: $AWS_SECRET_ACCESS_KEY).
-  -K --secret-key-file=SECRET_KEY_FILE    File containing AWS secret key to use.
 """
 
 from docopt import docopt
