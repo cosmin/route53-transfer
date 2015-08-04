@@ -50,6 +50,21 @@ Dump from one account, load into another.
     route53-transfer --access-key-id=ACCOUNT1 --secret-key=SECRET dump example.com
     route53-transfer --access-key-id=ACCOUNT2 --secret-key=SECRET load example.com
 
+Working with private zones
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+If hosting split-horizon zones, use --private to distinguish private domains.
+
+::
+
+    route53-transfer --private dump example.com example-private.csv
+    route53-transfer dump example.com example-public.csv
+
+When loading private zones, the target VPC region (--vpc-region)  and VPC id (--vpc-id) must be specified.
+
+::
+
+    route53-transfer --private --vpc-region {target vpc region} --vpc-id {target vpc id} load example.com example-private.csv
+
 In Python
 ~~~~~~~~~
 
