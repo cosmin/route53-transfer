@@ -1,3 +1,3 @@
-__version__ = "0.1.1-affirm"
+__version__ = "0.1.2"
 
 from app import load, dump
