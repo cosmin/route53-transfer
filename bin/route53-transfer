@@ -16,8 +16,8 @@ Options:
   -S --secret-key=SECRET_KEY              AWS secret key to use (default: $AWS_SECRET_ACCESS_KEY).
   -K --secret-key-file=SECRET_KEY_FILE    File containing AWS secret key to use.
   -P --private                            Private Zone
-  --vpc-region=VPC_REGION                 VPC Region (required if creating new Private Zone)
-  --vpc-id=VPC_ID                         VPC ID (required if creating new Private Zone)
+  --vpc-region=VPC_REGION                 Private Zone VPC Region (required for --private, default: $AWS_DEFAULT_REGION)
+  --vpc-id=VPC_ID                         Private Zone VPC ID (required for --private)
 """
 
 from docopt import docopt
