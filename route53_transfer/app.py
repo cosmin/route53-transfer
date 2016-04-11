@@ -19,7 +19,8 @@ class ComparableRecord(object):
     def __hash__(self):
         it = (self.name, self.type, self.alias_hosted_zone_id,
               self.alias_dns_name, tuple(sorted(self.resource_records)),
-              self.ttl, self.region, self.weight, self.identifier)
+              self.ttl, self.region, self.weight, self.identifier,
+              self.failover, self.alias_evaluate_target_health)
         return it.__hash__()
 
     def to_change_dict(self):
@@ -101,6 +102,13 @@ def group_values(lines):
             record.region = first[4] or None
             record.weight = first[5] or None
             record.identifier = first[6] or None
+            record.failover = first[7] or None
+            if first[8] == 'True':
+                 record.alias_evaluate_target_health = True
+            elif first[8] == 'False':
+                 record.alias_evaluate_target_health = False
+            else:
+                record.alias_evaluate_target_health = None
 
             yield record
 
@@ -131,7 +139,7 @@ def comparable(records):
 
 def get_file(filename, mode):
     ''' Get a file-like object for a filename and mode.
-    
+
         If filename is "-" return one of stdin or stdout.
     '''
     if filename == '-':
@@ -147,7 +155,7 @@ def get_file(filename, mode):
 
 def load(con, zone_name, file_in, **kwargs):
     ''' Send DNS records from input file to Route 53.
-    
+
         Arguments are Route53 connection, zone name, vpc info, and file to open for reading.
     '''
     vpc = kwargs.get('vpc', {})
@@ -183,7 +191,7 @@ def load(con, zone_name, file_in, **kwargs):
 
 def dump(con, zone_name, fout, **kwargs):
     ''' Receive DNS records from Route 53 to output file.
-    
+
         Arguments are Route53 connection, zone name, vpc info, and file to open for writing.
     '''
     vpc = kwargs.get('vpc', {})
@@ -194,7 +202,7 @@ def dump(con, zone_name, fout, **kwargs):
                                                               zone_name))
 
     out = csv.writer(fout)
-    out.writerow(['NAME', 'TYPE', 'VALUE', 'TTL', 'REGION', 'WEIGHT', 'SETID'])
+    out.writerow(['NAME', 'TYPE', 'VALUE', 'TTL', 'REGION', 'WEIGHT', 'SETID', 'FAILOVER', "EVALUATE_HEALTH"])
 
     records = list(con.get_all_rrsets(zone['id']))
     for r in records:
@@ -203,7 +211,7 @@ def dump(con, zone_name, fout, **kwargs):
         else:
             vals = r.resource_records
         for val in vals:
-            out.writerow([r.name, r.type, val, r.ttl, r.region, r.weight, r.identifier])
+            out.writerow([r.name, r.type, val, r.ttl, r.region, r.weight, r.identifier, r.failover, r.alias_evaluate_target_health])
     fout.flush()
 
 
