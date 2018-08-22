@@ -1,3 +1,5 @@
+from __future__ import print_function
+
 import csv, sys, time
 from datetime import datetime
 import itertools
@@ -173,20 +175,20 @@ def load(con, zone_name, file_in, **kwargs):
         changes = ResourceRecordSets(con, zone['id'])
         for record in to_delete:
             change = changes.add_change('DELETE', **record.to_change_dict())
-            print "DELETE", record.name, record.type
+            print ("DELETE", record.name, record.type)
             for value in record.resource_records:
                 change.add_value(value)
         for record in to_add:
             change = changes.add_change('CREATE', **record.to_change_dict())
-            print "CREATE", record.name, record.type
+            print ("CREATE", record.name, record.type)
             for value in record.resource_records:
                 change.add_value(value)
 
-        print "Applying changes..."
+        print ("Applying changes...")
         changes.commit()
-        print "Done."
+        print ("Done.")
     else:
-        print "No changes."
+        print ("No changes.")
 
 
 def dump(con, zone_name, fout, **kwargs):
