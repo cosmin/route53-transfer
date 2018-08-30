@@ -4,11 +4,13 @@ import csv, sys, time
 from datetime import datetime
 import itertools
 from os import environ
-from os.path import join
 from boto import route53
+from boto import connect_s3
 from boto.route53.record import Record, ResourceRecordSets
+from boto.s3.key import Key
 
 ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", datetime.utcnow().utctimetuple())
+
 
 class ComparableRecord(object):
     def __init__(self, obj):
@@ -51,7 +53,6 @@ def get_aws_credentials(params):
 
 
 def get_zone(con, zone_name, vpc):
-
 
     res = con.get_all_hosted_zones()
     zones = res['ListHostedZonesResponse']['HostedZones']
@@ -217,9 +218,18 @@ def dump(con, zone_name, fout, **kwargs):
     fout.flush()
 
 
+def up_to_s3(con, file, s3_bucket):
+    con.create_bucket(s3_bucket)
+    bucket = con.get_bucket(s3_bucket)
+    bucket_key = Key(bucket)
+    bucket_key.key = file
+    bucket_key.set_contents_from_filename(file, num_cb=10)
+
+
 def run(params):
     access_key, secret_key = get_aws_credentials(params)
     con = route53.connect_to_region('universal', aws_access_key_id=access_key, aws_secret_access_key=secret_key)
+    con_s3 = connect_s3(aws_access_key_id=access_key, aws_secret_access_key=secret_key)
     zone_name = params['<zone>']
     filename = params['<file>']
 
@@ -236,6 +246,8 @@ def run(params):
 
     if params.get('dump'):
         dump(con, zone_name, get_file(filename, 'w'), vpc=vpc)
+        if params.get('--s3-bucket'):
+            up_to_s3(con_s3, params.get('<file>'), params.get('--s3-bucket'))
     elif params.get('load'):
         load(con, zone_name, get_file(filename, 'r'), vpc=vpc)
     else:
