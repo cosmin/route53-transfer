@@ -41,12 +41,18 @@ def exit_with_error(error):
 
 
 def get_aws_credentials(params):
-    access_key = params.get('--access-key-id') or environ.get('AWS_ACCESS_KEY_ID')
+    try:
+        access_key = params.get('--access-key-id') or environ.get('AWS_ACCESS_KEY_ID')
+    except:
+        print("--access-key-id or AWS_ACCESS_KEY_ID is needed")
     if params.get('--secret-key-file'):
         with open(params.get('--secret-key-file')) as f:
             secret_key = f.read().strip()
     else:
-        secret_key = params.get('--secret-key') or environ.get('AWS_SECRET_ACCESS_KEY')
+        try:
+            secret_key = params.get('--secret-key') or environ.get('AWS_SECRET_ACCESS_KEY')
+        except
+             print(" --secret-key or  AWS_SECRET_ACCESS_KEY is needed")
     return access_key, secret_key
 
 
