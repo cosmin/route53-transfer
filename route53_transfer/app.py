@@ -161,7 +161,9 @@ def load(con, zone_name, file_in, **kwargs):
 
         Arguments are Route53 connection, zone name, vpc info, and file to open for reading.
     '''
+    dry_run = kwargs.get('dry_run', False)
     vpc = kwargs.get('vpc', {})
+
     zone = get_zone(con, zone_name, vpc)
     if not zone:
         zone = create_zone(con, zone_name, vpc)
@@ -181,12 +183,15 @@ def load(con, zone_name, file_in, **kwargs):
                 change.add_value(value)
         for record in to_add:
             change = changes.add_change('CREATE', **record.to_change_dict())
-            print ("CREATE", record.name, record.type)
+            print ("CREATE", record.name, record.type, record.resource_records)
             for value in record.resource_records:
                 change.add_value(value)
 
-        print ("Applying changes...")
-        changes.commit()
+        if dry_run:
+            print ("Dry run requested: no changes are going to be applied")
+        else:
+            print ("Applying changes...")
+            changes.commit()
         print ("Done.")
     else:
         print ("No changes.")
@@ -249,6 +254,7 @@ def run(params):
         if params.get('--s3-bucket'):
             up_to_s3(con_s3, params.get('<file>'), params.get('--s3-bucket'))
     elif params.get('load'):
-        load(con, zone_name, get_file(filename, 'r'), vpc=vpc)
+        dry_run = params.get('--dry-run', False)
+        load(con, zone_name, get_file(filename, 'r'), vpc=vpc, dry_run=dry_run)
     else:
         return 1
