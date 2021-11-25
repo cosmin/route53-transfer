@@ -198,8 +198,46 @@ def load(con, zone_name, file_in, **kwargs):
         else:
             zone = create_zone(con, zone_name, vpc)
 
-    existing_records = comparable(skip_apex_soa_ns(zone, con.get_all_rrsets(zone['id'])))
-    desired_records = comparable(skip_apex_soa_ns(zone, read_records(file_in)))
+    existing_records = con.get_all_rrsets(zone['id'])
+    desired_records = read_records(file_in)
+
+    change_transactions = compute_changesets(con, zone, existing_records, desired_records)
+
+    if dry_run:
+        print("Dry run requested: no changes are going to be applied")
+    else:
+        if change_transactions:
+            for changes in change_transactions:
+                print("Applying changes...")
+                changes.commit()
+            print("Done.")
+        else:
+            print("No changes.")
+
+
+def compute_changesets(con, zone, existing_records, desired_records):
+    """
+    Given two sets of existing and desired resource records, compute the
+    list of transactions (ResourceRecordSets changes) that will bring us
+    from the existing state to the desired state.
+
+    We need to take into account that we can't commit our changes in a single
+    transaction in certain cases. One such cases is when we introduce records
+    that are aliases to existing records. Route53 will reject our updates
+    if the target record for the alias does not exist yet. The workaround is
+    to execute the change in two distinct transactions (ResourceRecordSet
+    changes), the first to commit the target resources of all the new aliases
+    and the second one for all the other resource records.
+
+    :param con: Route53 connection object
+    :param zone: Route53 zone object
+    :param existing_records: list of rrsets that exist in the r53 zone
+    :param desired_records: list of rrsets that we desire as final state
+    :return: list of ResourceRecordSet changes to be applied
+    """
+
+    existing_records = comparable(skip_apex_soa_ns(zone, existing_records))
+    desired_records = comparable(skip_apex_soa_ns(zone, desired_records))
 
     to_delete = existing_records.difference(desired_records)
     to_add = desired_records.difference(existing_records)
@@ -217,14 +255,7 @@ def load(con, zone_name, file_in, **kwargs):
             for value in record.resource_records:
                 change.add_value(value)
 
-        if dry_run:
-            print ("Dry run requested: no changes are going to be applied")
-        else:
-            print ("Applying changes...")
-            changes.commit()
-        print ("Done.")
-    else:
-        print ("No changes.")
+        return [changes]
 
 
 def dump(con, zone_name, fout, **kwargs):
