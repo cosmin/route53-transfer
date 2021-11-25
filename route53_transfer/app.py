@@ -208,12 +208,12 @@ def load(con, zone_name, file_in, **kwargs):
         changes = ResourceRecordSets(con, zone['id'])
         for record in to_delete:
             change = changes.add_change('DELETE', **record.to_change_dict())
-            print ("DELETE", record.name, record.type)
+            print("DELETE", record_short_summary(record))
             for value in record.resource_records:
                 change.add_value(value)
         for record in to_add:
             change = changes.add_change('CREATE', **record.to_change_dict())
-            print ("CREATE", record.name, record.type, record.resource_records)
+            print("CREATE", record_short_summary(record))
             for value in record.resource_records:
                 change.add_value(value)
 
@@ -251,7 +251,7 @@ def dump(con, zone_name, fout, **kwargs):
     fout.flush()
 
 
-def record_to_stringlist(r: Record):
+def record_to_stringlist(r: Record) -> list:
     out_lines = []
 
     if r.alias_dns_name:
@@ -265,6 +265,22 @@ def record_to_stringlist(r: Record):
             r.failover, r.alias_evaluate_target_health])
 
     return out_lines
+
+
+def record_short_summary(r: Record) -> str:
+    """
+    Given a R53 resource record, returns a short string summary of it.
+
+    Used when showing what records would be created, modified or deleted
+    in a dry-run execution.
+
+    :param r: R53 resource record
+    :return: short summary string of the input record
+    """
+    if r.alias_dns_name:
+        return f"{r.name} {r.type} ALIAS:{r.alias_hosted_zone_id}:{r.alias_dns_name} {r.ttl}"
+    else:
+        return f"{r.name} {r.type} {r.resource_records} {r.ttl}"
 
 
 def up_to_s3(con, file, s3_bucket):
