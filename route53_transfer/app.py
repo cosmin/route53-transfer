@@ -241,13 +241,27 @@ def dump(con, zone_name, fout, **kwargs):
 
     records = list(con.get_all_rrsets(zone['id']))
     for r in records:
-        if r.alias_dns_name:
-            vals = [':'.join(['ALIAS', r.alias_hosted_zone_id, r.alias_dns_name])]
-        else:
-            vals = r.resource_records
-        for val in vals:
-            out.writerow([r.name, r.type, val, r.ttl, r.region, r.weight, r.identifier, r.failover, r.alias_evaluate_target_health])
+        lines = record_to_stringlist(r)
+        for line in lines:
+            out.writerow(line)
+
     fout.flush()
+
+
+def record_to_stringlist(r: Record):
+    out_lines = []
+
+    if r.alias_dns_name:
+        vals = [':'.join(['ALIAS', r.alias_hosted_zone_id, r.alias_dns_name])]
+    else:
+        vals = r.resource_records
+
+    for val in vals:
+        out_lines.append([
+            r.name, r.type, val, r.ttl, r.region, r.weight, r.identifier,
+            r.failover, r.alias_evaluate_target_health])
+
+    return out_lines
 
 
 def up_to_s3(con, file, s3_bucket):
