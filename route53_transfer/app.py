@@ -193,7 +193,10 @@ def load(con, zone_name, file_in, **kwargs):
 
     zone = get_zone(con, zone_name, vpc)
     if not zone:
-        zone = create_zone(con, zone_name, vpc)
+        if dry_run:
+            print('CREATE ZONE:', zone_name)
+        else:
+            zone = create_zone(con, zone_name, vpc)
 
     existing_records = comparable(skip_apex_soa_ns(zone, con.get_all_rrsets(zone['id'])))
     desired_records = comparable(skip_apex_soa_ns(zone, read_records(file_in)))
