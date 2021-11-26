@@ -1,5 +1,7 @@
 from __future__ import print_function
 
+print("THIS IS THE DEV VERSION")
+
 import csv, sys, time
 from datetime import datetime
 import itertools
@@ -245,11 +247,15 @@ def changes_to_r53_updates(con, zone, change_operations):
 
     for op in to_delete:
         record = op["record"]
-        r53_update.add_change("DELETE", **record.to_change_dict())
+        change = r53_update.add_change("DELETE", **record.to_change_dict())
+        for value in record.resource_records:
+            change.add_value(value)
 
     for op in to_create:
         record = op["record"]
-        r53_update.add_change("CREATE", **record.to_change_dict())
+        change = r53_update.add_change("CREATE", **record.to_change_dict())
+        for value in record.resource_records:
+            change.add_value(value)
 
     return [r53_update]
 
