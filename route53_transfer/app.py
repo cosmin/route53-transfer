@@ -239,23 +239,24 @@ def changes_to_r53_updates(con, zone, change_operations):
     """
     r53_update = ResourceRecordSets(con, zone["id"])
 
-    def is_type(change, type_):
-        return change["operation"] == type_
+    def is_type(type_):
+        return lambda change: change["operation"] == type_
 
-    to_delete = filter(lambda c: is_type(c, "DELETE"), change_operations)
-    to_create = filter(lambda c: is_type(c, "CREATE"), change_operations)
+    to_delete = filter(is_type("DELETE"), change_operations)
+    to_create = filter(is_type("CREATE"), change_operations)
+
+    def add_change(rrsets, change):
+        type_ = change["operation"]
+        record = change["record"]
+        change = rrsets.add_change(type_, **record.to_change_dict())
+        for value in record.resource_records:
+            change.add_value(value)
 
     for op in to_delete:
-        record = op["record"]
-        change = r53_update.add_change("DELETE", **record.to_change_dict())
-        for value in record.resource_records:
-            change.add_value(value)
+        add_change(r53_update, op)
 
     for op in to_create:
-        record = op["record"]
-        change = r53_update.add_change("CREATE", **record.to_change_dict())
-        for value in record.resource_records:
-            change.add_value(value)
+        add_change(r53_update, op)
 
     return [r53_update]
 
