@@ -201,21 +201,60 @@ def load(con, zone_name, file_in, **kwargs):
     existing_records = con.get_all_rrsets(zone['id'])
     desired_records = read_records(file_in)
 
-    change_transactions = compute_changesets(con, zone, existing_records, desired_records)
+    changes = compute_changes(zone, existing_records, desired_records)
 
     if dry_run:
         print("Dry run requested: no changes are going to be applied")
+        for change in changes:
+            operation = change["operation"]
+            record = change["record"]
+            print(operation, record_short_summary(record))
     else:
-        if change_transactions:
-            for changes in change_transactions:
-                print("Applying changes...")
-                changes.commit()
+        r53_update_batches = changes_to_r53_updates(con, zone, changes)
+        if r53_update_batches:
+            print("Applying changes...")
+            for update_batch in r53_update_batches:
+                update_batch.commit()
             print("Done.")
         else:
             print("No changes.")
 
 
-def compute_changesets(con, zone, existing_records, desired_records):
+def changes_to_r53_updates(con, zone, change_operations):
+    """
+    Given a list of zone change operations as computed by `compute_changes()`,
+    returns a list of R53 update batches. Normally one update batch, that is,
+    a `ResourceRecordSets` object, will suffice for all updates. In certain
+    cases, when records are aliases and their target records do not already
+    exist in a zone, it's necessary to split the zone updates in different
+    batches, which have to be committed in two separate operations.
+
+    :param con: Route53 connection object
+    :param zone: Route53 zone object
+    :param change_operations: list of zone change operations as returned by
+           `compute_changes()`
+    :return: r53_updates: list of ResourceRecordSets objects
+    """
+    r53_update = ResourceRecordSets(con, zone["id"])
+
+    def is_type(change, type_):
+        return change["operation"] == type_
+
+    to_delete = filter(lambda c: is_type(c, "DELETE"), change_operations)
+    to_create = filter(lambda c: is_type(c, "CREATE"), change_operations)
+
+    for op in to_delete:
+        record = op["record"]
+        r53_update.add_change("DELETE", **record.to_change_dict())
+
+    for op in to_create:
+        record = op["record"]
+        r53_update.add_change("CREATE", **record.to_change_dict())
+
+    return [r53_update]
+
+
+def compute_changes(zone, existing_records, desired_records):
     """
     Given two sets of existing and desired resource records, compute the
     list of transactions (ResourceRecordSets changes) that will bring us
@@ -229,7 +268,6 @@ def compute_changesets(con, zone, existing_records, desired_records):
     changes), the first to commit the target resources of all the new aliases
     and the second one for all the other resource records.
 
-    :param con: Route53 connection object
     :param zone: Route53 zone object
     :param existing_records: list of rrsets that exist in the r53 zone
     :param desired_records: list of rrsets that we desire as final state
@@ -242,20 +280,20 @@ def compute_changesets(con, zone, existing_records, desired_records):
     to_delete = existing_records.difference(desired_records)
     to_add = desired_records.difference(existing_records)
 
-    if to_add or to_delete:
-        changes = ResourceRecordSets(con, zone['id'])
-        for record in to_delete:
-            change = changes.add_change('DELETE', **record.to_change_dict())
-            print("DELETE", record_short_summary(record))
-            for value in record.resource_records:
-                change.add_value(value)
-        for record in to_add:
-            change = changes.add_change('CREATE', **record.to_change_dict())
-            print("CREATE", record_short_summary(record))
-            for value in record.resource_records:
-                change.add_value(value)
+    changes = []
 
-        return [changes]
+    def add_op(op_type: str, zone, record):
+        changes.append({"zone": zone,
+                        "operation": op_type,
+                        "record": record,})
+
+    if to_add or to_delete:
+        for record in to_delete:
+            add_op("DELETE", zone, record)
+        for record in to_add:
+            add_op("CREATE", zone, record)
+
+    return changes
 
 
 def dump(con, zone_name, fout, **kwargs):
