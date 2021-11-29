@@ -191,6 +191,8 @@ def load(con, zone_name, file_in, **kwargs):
         Arguments are Route53 connection, zone name, vpc info, and file to open for reading.
     '''
     dry_run = kwargs.get('dry_run', False)
+    use_upsert = kwargs.get('use_upsert', False)
+
     vpc = kwargs.get('vpc', {})
 
     zone = get_zone(con, zone_name, vpc)
@@ -203,7 +205,10 @@ def load(con, zone_name, file_in, **kwargs):
     existing_records = con.get_all_rrsets(zone['id'])
     desired_records = read_records(file_in)
 
-    changes = compute_changes(zone, existing_records, desired_records)
+    if use_upsert:
+        changes = compute_changes_upsert(zone, existing_records, desired_records)
+    else:
+        changes = compute_changes(zone, existing_records, desired_records)
 
     if dry_run:
         print("Dry run requested: no changes are going to be applied")
@@ -303,6 +308,38 @@ def compute_changes(zone, existing_records, desired_records):
     return changes
 
 
+def compute_changes_upsert(zone, existing_records, desired_records):
+    existing_records = comparable(skip_apex_soa_ns(zone, existing_records))
+    desired_records = comparable(skip_apex_soa_ns(zone, desired_records))
+
+    to_delete = existing_records.difference(desired_records)
+    to_add = desired_records.difference(existing_records)
+    changes = list()
+
+    def add_op(op_type: str, zone: dict, record: Record) -> None:
+        changes.append({"zone": zone,
+                        "operation": op_type,
+                        "record": record})
+
+    def is_in_set(record: ComparableRecord, s: set) -> bool:
+        for entry in s:
+            if entry.to_change_dict()['name'] == record.to_change_dict()['name']:
+                return True
+        return False
+
+    if to_add or to_delete:
+
+        for record in to_add:
+            op_type = "UPSERT" if is_in_set(record, to_delete) else "CREATE"
+            add_op(op_type, zone, record)
+
+        for record in to_delete:
+            if not is_in_set(record, to_add):
+                add_op("DELETE", zone, record)
+
+    return changes
+
+
 def dump(con, zone_name, fout, **kwargs):
     ''' Receive DNS records from Route 53 to output file.
 
@@ -389,8 +426,12 @@ def run(params):
         dump(con, zone_name, get_file(filename, 'w'), vpc=vpc)
         if params.get('--s3-bucket'):
             up_to_s3(con_s3, params.get('<file>'), params.get('--s3-bucket'))
+
     elif params.get('load'):
         dry_run = params.get('--dry-run', False)
-        load(con, zone_name, get_file(filename, 'r'), vpc=vpc, dry_run=dry_run)
+        use_upsert = params.get('--use-upsert', False)
+
+        load(con, zone_name, get_file(filename, 'r'), vpc=vpc,
+             dry_run=dry_run, use_upsert=use_upsert)
     else:
         return 1
