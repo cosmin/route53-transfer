@@ -38,6 +38,16 @@ class ComparableRecord(object):
                 data[k] = v
         return data
 
+    def __repr__(self):
+        rr = " ".join(self.resource_records)
+        extra_info = f"{self.ttl}:{rr}"
+
+        if self.alias_dns_name:
+            extra_info = f"ALIAS {self.alias_hosted_zone_id} {self.alias_dns_name} " \
+                         f"(EvalTarget {self.alias_evaluate_target_health})"
+
+        return f"<ComparableRecord:{self.name}:{self.type}:{extra_info}>"
+
 
 def exit_with_error(error):
     sys.stderr.write(error)
@@ -281,6 +291,7 @@ def compute_changes(zone, existing_records, desired_records, use_upsert=False):
     :param zone: Route53 zone object
     :param existing_records: list of rrsets that exist in the r53 zone
     :param desired_records: list of rrsets that we desire as final state
+    :param use_upsert: if True, prefers UPSERT operations to CREATE and DELETE
     :return: list of ResourceRecordSet changes to be applied
     """
 
