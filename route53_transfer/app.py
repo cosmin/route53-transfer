@@ -205,10 +205,8 @@ def load(con, zone_name, file_in, **kwargs):
     existing_records = con.get_all_rrsets(zone['id'])
     desired_records = read_records(file_in)
 
-    if use_upsert:
-        changes = compute_changes_upsert(zone, existing_records, desired_records)
-    else:
-        changes = compute_changes(zone, existing_records, desired_records)
+    changes = compute_changes(zone, existing_records, desired_records,
+                              use_upsert=use_upsert)
 
     if dry_run:
         print("Dry run requested: no changes are going to be applied")
@@ -266,7 +264,7 @@ def changes_to_r53_updates(con, zone, change_operations):
     return [r53_update]
 
 
-def compute_changes(zone, existing_records, desired_records):
+def compute_changes(zone, existing_records, desired_records, use_upsert=False):
     """
     Given two sets of existing and desired resource records, compute the
     list of transactions (ResourceRecordSets changes) that will bring us
@@ -291,51 +289,26 @@ def compute_changes(zone, existing_records, desired_records):
 
     to_delete = existing_records.difference(desired_records)
     to_add = desired_records.difference(existing_records)
-
-    changes = []
-
-    def add_op(op_type: str, zone, record):
-        changes.append({"zone": zone,
-                        "operation": op_type,
-                        "record": record,})
-
-    if to_add or to_delete:
-        for record in to_delete:
-            add_op("DELETE", zone, record)
-        for record in to_add:
-            add_op("CREATE", zone, record)
-
-    return changes
-
-
-def compute_changes_upsert(zone, existing_records, desired_records):
-    existing_records = comparable(skip_apex_soa_ns(zone, existing_records))
-    desired_records = comparable(skip_apex_soa_ns(zone, desired_records))
-
-    to_delete = existing_records.difference(desired_records)
-    to_add = desired_records.difference(existing_records)
     changes = list()
-
-    def add_op(op_type: str, zone: dict, record: Record) -> None:
-        changes.append({"zone": zone,
-                        "operation": op_type,
-                        "record": record})
 
     def is_in_set(record: ComparableRecord, s: set) -> bool:
         for entry in s:
-            if entry.to_change_dict()['name'] == record.to_change_dict()['name']:
+            if entry.to_change_dict()["name"] == record.to_change_dict()["name"]:
                 return True
         return False
 
     if to_add or to_delete:
-
         for record in to_add:
-            op_type = "UPSERT" if is_in_set(record, to_delete) else "CREATE"
-            add_op(op_type, zone, record)
+            op_type = "UPSERT" if use_upsert and is_in_set(record, to_delete) else "CREATE"
+            changes.append({"zone": zone,
+                            "operation": op_type,
+                            "record": record})
 
         for record in to_delete:
-            if not is_in_set(record, to_add):
-                add_op("DELETE", zone, record)
+            if not use_upsert or not is_in_set(record, to_add):
+                changes.insert(0, {"zone": zone,
+                                   "operation": "DELETE",
+                                   "record": record})
 
     return changes
 
