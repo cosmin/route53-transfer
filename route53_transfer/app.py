@@ -308,15 +308,18 @@ def compute_changes(zone, existing_records, desired_records, use_upsert=False):
                 return True
         return False
 
+    def sort_by_name(s: set):
+        return sorted(s, key=lambda comparable_record: comparable_record.name)
+
     if to_add or to_delete:
-        for record in to_add:
+        for record in sort_by_name(to_add):
             op_type = "UPSERT" if use_upsert and is_in_set(record, to_delete) else "CREATE"
             changes.append({"zone": zone,
                             "operation": op_type,
                             "record": record})
 
-        for record in to_delete:
-            if not use_upsert or not is_in_set(record, to_add):
+        for record in sort_by_name(to_delete):
+            if not (use_upsert and is_in_set(record, to_add)):
                 changes.insert(0, {"zone": zone,
                                    "operation": "DELETE",
                                    "record": record})
