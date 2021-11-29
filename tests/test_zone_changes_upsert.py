@@ -9,7 +9,7 @@ TEST_ZONE = {"id": TEST_ZONE_ID, "name": TEST_ZONE_NAME}
 
 
 def diff_zone(rrset_before, rrset_after):
-    return app.compute_changes(TEST_ZONE, rrset_before, rrset_after)
+    return app.compute_changes_upsert(TEST_ZONE, rrset_before, rrset_after)
 
 
 def to_comparable(r):
@@ -92,42 +92,6 @@ def test_soa_and_ns_records_are_ignored():
     assert len(changes) == 0
 
 
-def test_soa_and_ns_records_are_ignored():
-    """
-    SOA and NS records are ignored when computing zone changes
-    """
-
-    soa_rr = Record()
-    soa_rr.type = "SOA"
-    soa_rr.name = TEST_ZONE_NAME
-
-    rrset_before = []
-    rrset_after = [soa_rr]
-
-    changes = diff_zone(rrset_before, rrset_after)
-    assert len(changes) == 0
-
-    ns_rr = Record()
-    ns_rr.type = "NS"
-    ns_rr.name = TEST_ZONE_NAME
-
-    rrset_before = []
-    rrset_after = [ns_rr]
-
-    changes = diff_zone(rrset_before, rrset_after)
-    assert len(changes) == 0
-
-    rrset_after = [soa_rr, ns_rr]
-
-    changes = diff_zone(rrset_before, rrset_after)
-    assert len(changes) == 0
-
-    rrset_before = rrset_after = [soa_rr, ns_rr]
-
-    changes = diff_zone(rrset_before, rrset_after)
-    assert len(changes) == 0
-
-
 def test_add_one_simple_a_record():
     a_ptr = Record()
     a_ptr.type = "A"
@@ -139,13 +103,11 @@ def test_add_one_simple_a_record():
 
     changes = diff_zone(rrset_before, rrset_after)
 
-    assert_changes_eq(changes, [
-        {
-            "operation": "CREATE",
-            "zone": TEST_ZONE,
-            "record": a_ptr,
-        }
-    ])
+    assert_changes_eq(changes, [{
+      "operation": "CREATE",
+      "zone": TEST_ZONE,
+      "record": a_ptr,
+    }])
 
 
 def test_replace_simple_a_record():
@@ -164,19 +126,11 @@ def test_replace_simple_a_record():
 
     changes = diff_zone(rrset_before, rrset_after)
 
-    assert_changes_eq(changes, [
-        {
-            "operation": "DELETE",
-            "zone": TEST_ZONE,
-            "record": server1_ptr,
-        },
-
-        {
-            "operation": "CREATE",
-            "zone": TEST_ZONE,
-            "record": modified_server1_ptr,
-        }
-    ])
+    assert_changes_eq(changes, [{
+        "operation": "UPSERT",
+        "zone": TEST_ZONE,
+        "record": ComparableRecord(modified_server1_ptr),
+    }])
 
 
 def test_add_a_record_to_existing_zone():
@@ -195,7 +149,6 @@ def test_add_a_record_to_existing_zone():
     rrset_after = [server1_ptr, server2_ptr]
 
     changes = diff_zone(rrset_before, rrset_after)
-
     assert_changes_eq(changes, [
         {
             "operation": "CREATE",
