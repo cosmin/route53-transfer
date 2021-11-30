@@ -1,3 +1,7 @@
+"""
+Helper and custom assert methods to test dns zone updates
+"""
+
 from route53_transfer import app
 from route53_transfer.app import ComparableRecord
 

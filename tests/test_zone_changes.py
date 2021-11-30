@@ -1,3 +1,11 @@
+"""
+Unit tests for the zone update changes computation
+
+To run the same tests with and without upsert operations, without duplicating
+all the test code, we use `@pytest.mark.parametrize` passing the zone
+difference change function as a parameter.
+"""
+
 import pytest
 from boto.route53.record import Record
 
