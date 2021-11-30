@@ -250,32 +250,57 @@ def changes_to_r53_updates(con, zone, change_operations):
            `compute_changes()`
     :return: r53_updates: list of ResourceRecordSets objects
     """
-    r53_update = ResourceRecordSets(con, zone["id"])
+    zone_update = ResourceRecordSets(con, zone["id"])
 
-    def is_type(type_):
-        return lambda change: change["operation"] == type_
-
-    to_delete = filter(is_type("DELETE"), change_operations)
-    to_create = filter(is_type("CREATE"), change_operations)
-    to_upsert = filter(is_type("UPSERT"), change_operations)
-
-    def add_change(rrsets, change):
-        type_ = change["operation"]
-        record = change["record"]
+    def add_change(rrsets, change_operation):
+        type_ = change_operation["operation"]
+        record = change_operation["record"]
         change = rrsets.add_change(type_, **record.to_change_dict())
         for value in record.resource_records:
             change.add_value(value)
 
-    for op in to_delete:
-        add_change(r53_update, op)
+    def is_type(type_: str):
+        return lambda change: change["operation"] == type_
 
-    for op in to_upsert:
-        add_change(r53_update, op)
+    def is_same_zone(change: dict) -> bool:
+        return change["zone"]["id"] == zone["id"]
 
-    for op in to_create:
-        add_change(r53_update, op)
+    # Identify all the records that are targets of aliases.
+    # If these records are new and in the same zone, they will need to be
+    # created first with a separate route53 update.
 
-    return [r53_update]
+    alias_target_names = set(
+        map(lambda c: c["record"].alias_dns_name,
+            filter(lambda c: c["record"].alias_dns_name is not None and is_same_zone(c),
+               change_operations)))
+
+    def is_alias_target(record: ComparableRecord) -> bool:
+        return record.name in alias_target_names
+
+    if alias_target_names:
+        # The record that is a target of an alias might not exist yet.
+        # By moving the upsert change to an earlier update batch, we can ensure
+        # it already exists when we commit the record that refers to it.
+        # Failing to do so will result in R53 rejecting our update request.
+        r53_alias_prerequisites = ResourceRecordSets(con, zone["id"])
+        for change in change_operations:
+            type_ = change["operation"]
+            record = change["record"]
+            is_new_alias_target = is_alias_target(record) and type_ in ("CREATE", "UPSERT")
+            if is_new_alias_target:
+                add_change(r53_alias_prerequisites, change)
+                change_operations.remove(change)
+    else:
+        r53_alias_prerequisites = None
+
+    for t in ("DELETE", "UPSERT", "CREATE"):
+        for op in filter(is_type(t), change_operations):
+            add_change(zone_update, op)
+
+    r53_update_batches = list(filter(lambda rrset: rrset is not None and rrset.changes,
+                                     (r53_alias_prerequisites, zone_update,)))
+
+    return r53_update_batches
 
 
 def compute_changes(zone, existing_records, desired_records, use_upsert=False):
