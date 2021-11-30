@@ -257,6 +257,7 @@ def changes_to_r53_updates(con, zone, change_operations):
 
     to_delete = filter(is_type("DELETE"), change_operations)
     to_create = filter(is_type("CREATE"), change_operations)
+    to_upsert = filter(is_type("UPSERT"), change_operations)
 
     def add_change(rrsets, change):
         type_ = change["operation"]
@@ -266,6 +267,9 @@ def changes_to_r53_updates(con, zone, change_operations):
             change.add_value(value)
 
     for op in to_delete:
+        add_change(r53_update, op)
+
+    for op in to_upsert:
         add_change(r53_update, op)
 
     for op in to_create:
