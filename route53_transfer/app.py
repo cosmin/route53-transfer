@@ -1,17 +1,43 @@
 from __future__ import print_function
-
-print("THIS IS THE DEV VERSION")
+from collections import defaultdict
 
 import csv, sys, time
 from datetime import datetime
 import itertools
 from os import environ
+
 from boto import route53
 from boto import connect_s3
 from boto.route53.record import Record, ResourceRecordSets
 from boto.s3.key import Key
 
 ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", datetime.utcnow().utctimetuple())
+
+
+class ChangeBatch():
+    """
+    Represents a single batch/transaction of changes to Route53
+
+    Having such a class simplifies the handling of the change operations as
+    we can use `ChangeBatch.add_change()` passing the change operation dict
+    as it was returned by `compute_changes()`.
+    """
+    def __init__(self):
+        self._changes = []
+
+    @property
+    def changes(self):
+        return self._changes
+
+    def add_change(self, change_operation):
+        record = change_operation["record"]
+        change = dict()
+        change["operation"] = change_operation["operation"]
+        change["change_dict"] = {**record.to_change_dict()}
+        change["rr_values"] = []
+        for value in record.resource_records:
+            change["rr_values"].append(value)
+        self._changes.append(change)
 
 
 class ComparableRecord(object):
@@ -235,7 +261,48 @@ def load(con, zone_name, file_in, **kwargs):
             print("No changes.")
 
 
-def changes_to_r53_updates(con, zone, change_operations):
+def assign_change_priority(zone: dict, change_operations: list) -> None:
+    """
+    Given a list of change operations derived from the difference of two zones
+    files, assign a priority integer to each change operation.
+
+    The priority integer serves two purposes:
+
+    1. Identify the relative order the changes. The target of an alias record
+       will have a higher priority, since it needs to be present when we
+       commit our change transaction.
+
+    2. Group together all change operations that can be committed together
+       in the same ResourceRecordSet change transaction.
+    """
+    rr_prio = defaultdict(int)
+
+    def is_same_zone(change: dict) -> bool:
+        return change["zone"]["id"] == zone["id"]
+
+    def is_alias(change: ComparableRecord) -> bool:
+        record = change["record"]
+        return record.alias_dns_name is not None and is_same_zone(change)
+
+    def is_new_alias(change: ComparableRecord) -> bool:
+        return is_alias(change) and change["operation"] in ("CREATE", "UPSERT")
+
+    for change in change_operations:
+        if is_new_alias(change):
+            record = change["record"]
+            rr_prio[record.alias_dns_name] += 1
+
+    for change in change_operations:
+        if is_new_alias(change):
+            record = change["record"]
+            rr_prio[record.alias_dns_name] += rr_prio[record.name]
+
+    for change in change_operations:
+        record = change["record"]
+        change["prio"] = rr_prio[record.name]
+
+
+def changes_to_r53_updates(zone, change_operations):
     """
     Given a list of zone change operations as computed by `compute_changes()`,
     returns a list of R53 update batches. Normally one update batch, that is,
@@ -244,61 +311,34 @@ def changes_to_r53_updates(con, zone, change_operations):
     exist in a zone, it's necessary to split the zone updates in different
     batches, which have to be committed in two separate operations.
 
-    :param con: Route53 connection object
-    :param zone: Route53 zone object
+    :param zone: Route53 zone object (dict with `id` and `name`)
     :param change_operations: list of zone change operations as returned by
            `compute_changes()`
-    :return: r53_updates: list of ResourceRecordSets objects
+    :return: r53_updates: list of ChangeBatch objects
     """
-    zone_update = ResourceRecordSets(con, zone["id"])
 
-    def add_change(rrsets, change_operation):
-        type_ = change_operation["operation"]
-        record = change_operation["record"]
-        change = rrsets.add_change(type_, **record.to_change_dict())
-        for value in record.resource_records:
-            change.add_value(value)
+    assign_change_priority(zone, change_operations)
 
-    def is_type(type_: str):
-        return lambda change: change["operation"] == type_
+    r53_update_batches = []
+    current_batch = ChangeBatch()
+    current_prio = None
 
-    def is_same_zone(change: dict) -> bool:
-        return change["zone"]["id"] == zone["id"]
+    for change in sorted(change_operations, key=lambda c: c["prio"], reverse=True):
+        order = change["prio"]
 
-    # Identify all the records that are targets of aliases.
-    # If these records are new and in the same zone, they will need to be
-    # created first with a separate route53 update.
+        if current_prio is None:
+            current_prio = order
 
-    alias_target_names = set(
-        map(lambda c: c["record"].alias_dns_name,
-            filter(lambda c: c["record"].alias_dns_name is not None and is_same_zone(c),
-               change_operations)))
+        if order != current_prio:
+            if current_batch.changes:
+                r53_update_batches.append(current_batch)
+            current_batch = ChangeBatch()
 
-    def is_alias_target(record: ComparableRecord) -> bool:
-        return record.name in alias_target_names
+        current_batch.add_change(change)
+        current_prio = order
 
-    if alias_target_names:
-        # The record that is a target of an alias might not exist yet.
-        # By moving the upsert change to an earlier update batch, we can ensure
-        # it already exists when we commit the record that refers to it.
-        # Failing to do so will result in R53 rejecting our update request.
-        r53_alias_prerequisites = ResourceRecordSets(con, zone["id"])
-        for change in change_operations:
-            type_ = change["operation"]
-            record = change["record"]
-            is_new_alias_target = is_alias_target(record) and type_ in ("CREATE", "UPSERT")
-            if is_new_alias_target:
-                add_change(r53_alias_prerequisites, change)
-                change_operations.remove(change)
-    else:
-        r53_alias_prerequisites = None
-
-    for t in ("DELETE", "UPSERT", "CREATE"):
-        for op in filter(is_type(t), change_operations):
-            add_change(zone_update, op)
-
-    r53_update_batches = list(filter(lambda rrset: rrset is not None and rrset.changes,
-                                     (r53_alias_prerequisites, zone_update,)))
+    if current_batch.changes:
+        r53_update_batches.append(current_batch)
 
     return r53_update_batches
 
