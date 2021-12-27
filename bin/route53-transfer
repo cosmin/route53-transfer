@@ -20,6 +20,7 @@ Options:
   --vpc-region=VPC_REGION                 Private Zone VPC Region (required for --private, default: $AWS_DEFAULT_REGION)
   --vpc-id=VPC_ID                         Private Zone VPC ID (required for --private)
   --dry-run                               Perform a dry run when loading. Changes won't be applied.
+  --use-upsert                            Use UPSERT operations when updating existing resources instead of CREATE + DELETE
 """
 
 from docopt import docopt
