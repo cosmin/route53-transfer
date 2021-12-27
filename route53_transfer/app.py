@@ -39,6 +39,18 @@ class ChangeBatch():
             change["rr_values"].append(value)
         self._changes.append(change)
 
+    def to_rrsets(self, con, zone):
+        rrsets = ResourceRecordSets(con, zone['id'])
+
+        for change in self.changes:
+            operation = change['operation']
+            change_dict = change['change_dict']
+            rrset = rrsets.add_change(operation, **change_dict)
+            for value in change['rr_values']:
+                rrset.add_value(value)
+
+        return rrsets
+
 
 class ComparableRecord(object):
     def __init__(self, obj):
@@ -244,21 +256,28 @@ def load(con, zone_name, file_in, **kwargs):
     changes = compute_changes(zone, existing_records, desired_records,
                               use_upsert=use_upsert)
 
-    if dry_run:
-        print("Dry run requested: no changes are going to be applied")
-        for change in changes:
-            operation = change["operation"]
-            record = change["record"]
-            print(operation, record_short_summary(record))
-    else:
-        r53_update_batches = changes_to_r53_updates(con, zone, changes)
-        if r53_update_batches:
-            print("Applying changes...")
-            for update_batch in r53_update_batches:
-                update_batch.commit()
-            print("Done.")
+    r53_update_batches = changes_to_r53_updates(zone, changes)
+    if r53_update_batches:
+
+        if dry_run:
+            print("Dry-run requested. No changes are going to be applied")
         else:
-            print("No changes.")
+            print("Applying changes...")
+
+        n = 1
+        for update_batch in r53_update_batches:
+            rrsets = update_batch.to_rrsets(con, zone)
+            print(f"* Update batch {n} ({len(rrsets.changes)} changes)")
+            if dry_run:
+                for change in rrsets.changes:
+                    print("    -", change[0], change[1])
+            else:
+                rrsets.commit()
+            n += 1
+
+        print("Done.")
+    else:
+        print("No changes.")
 
 
 def assign_change_priority(zone: dict, change_operations: list) -> None:
