@@ -1,20 +1,16 @@
 from __future__ import print_function
 from collections import defaultdict
 
-import csv, sys, time
+import sys
+import time
+import yaml
 from datetime import datetime
-import itertools
 from os import environ
 
-from boto import route53
-from boto import connect_s3
-from boto.route53.record import Record, ResourceRecordSets
-from boto.s3.key import Key
-
-ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", datetime.utcnow().utctimetuple())
+import boto3
 
 
-class ChangeBatch():
+class ChangeBatch:
     """
     Represents a single batch/transaction of changes to Route53
 
@@ -33,58 +29,81 @@ class ChangeBatch():
         record = change_operation["record"]
         change = dict()
         change["operation"] = change_operation["operation"]
-        change["change_dict"] = {**record.to_change_dict()}
-        change["rr_values"] = []
-        for value in record.resource_records:
-            change["rr_values"].append(value)
+        change["change_dict"] = {**record.__dict__}
         self._changes.append(change)
 
-    def to_rrsets(self, con, zone):
-        rrsets = ResourceRecordSets(con, zone['id'])
+    def commit(self, r53, zone):
+        """
+        Commit the current ChangeBatch to Route53 in a single transaction
+        """
+        def change_to_rrset(change):
+            return {'Action': change["operation"],
+                    'ResourceRecordSet': {**change["change_dict"]}}
 
-        for change in self.changes:
-            operation = change['operation']
-            change_dict = change['change_dict']
-            rrset = rrsets.add_change(operation, **change_dict)
-            for value in change['rr_values']:
-                rrset.add_value(value)
+        try:
+            changes_list = list(map(change_to_rrset, self.changes))
+            print("changes_list:", changes_list)
 
-        return rrsets
+            response = r53.change_resource_record_sets(
+                HostedZoneId=zone['id'],
+                ChangeBatch={
+                    'Comment': 'route53-transfer load operation',
+                    'Changes': changes_list,
+                })
+            print(response)
+            return True
+        # TODO : catch specific exceptions
+        except Exception as error:
+            print("Exception :" + str(error))
 
 
-class ComparableRecord(object):
+class ComparableRecord:
     def __init__(self, obj):
-        for k, v in obj.__dict__.items():
+        print(obj)
+        for k, v in obj.items():
             self.__dict__[k] = v
 
     def __eq__(self, other):
         return self.__dict__ == other.__dict__
 
     def __hash__(self):
-        it = (self.name, self.type, self.alias_hosted_zone_id,
-              self.alias_dns_name, tuple(sorted(self.resource_records)),
-              self.ttl, self.region, self.weight, self.identifier,
-              self.failover, self.alias_evaluate_target_health)
+        # TODO massively incomplete
+        it = (self.Name, self.Type,  # self.alias_hosted_zone_id,
+              #self.alias_dns_name, tuple(sorted(self.resource_records)),
+              tuple(sorted(map(lambda r: r['Value'], self.ResourceRecords))),
+              self.TTL,
+              #self.ttl, self.region, self.weight, self.identifier,
+              #self.failover, self.alias_evaluate_target_health)
+              )
         return it.__hash__()
 
     def to_change_dict(self):
+        # TODO massively incomplete and a mess
         data = {}
         for k, v in self.__dict__.items():
-            if k == 'resource_records':
+            if k == 'ResourceRecords':
                 continue
+            elif k == 'Name':
+                data['name'] = v
+            elif k == 'TTL':
+                data['ttl'] = v
+            elif k == 'Id':
+                data['id'] = v
+            elif k == 'Type':
+                data['type'] = v
             else:
                 data[k] = v
         return data
 
     def __repr__(self):
-        rr = " ".join(self.resource_records)
-        extra_info = f"{self.ttl}:{rr}"
+        rr = " ".join(map(lambda r: r['Value'], self.ResourceRecords))
+        extra_info = f"{self.TTL}:{rr}"
 
-        if self.alias_dns_name:
+        if hasattr(self, 'AliasDnsName') and self.AliasDnsName:
             extra_info = f"ALIAS {self.alias_hosted_zone_id} {self.alias_dns_name} " \
                          f"(EvalTarget {self.alias_evaluate_target_health})"
 
-        return f"<ComparableRecord:{self.name}:{self.type}:{extra_info}>"
+        return f"<ComparableRecord:{self.Name}:{self.Type}:{extra_info}>"
 
 
 def exit_with_error(error):
@@ -92,122 +111,126 @@ def exit_with_error(error):
     sys.exit(1)
 
 
-def get_aws_credentials(params):
-    access_key = params.get('--access-key-id') or environ.get('AWS_ACCESS_KEY_ID')
-    if params.get('--secret-key-file'):
-        with open(params.get('--secret-key-file')) as f:
-            secret_key = f.read().strip()
-    else:
-        secret_key = params.get('--secret-key') or environ.get('AWS_SECRET_ACCESS_KEY')
-    return access_key, secret_key
+def get_zone(r53_client, zone_name, vpc):
+    """
+    {
+        "HostedZones": [
+            {
+                "CallerReference": "7C1E9645-5350-B96B-B1E8-095AD8017ABA",
+                "Config": {
+                    "Comment": "Experimental",
+                    "PrivateZone": false
+                },
+                "Id": "/hostedzone/ZA3FSFWA1ZAVE",
+                "Name": "kahoot-experimental.it.",
+                "ResourceRecordSetCount": 100
+            },
+            {
+                "CallerReference": "7AB28767-96B5-E3B8-A2D2-C893278F2CEE",
+                "Config": {
+                    "PrivateZone": false
+                },
+                "Id": "/hostedzone/Z1HK9LVYEVER1Y",
+                "Name": "kahoot-experimental.com.",
+                "ResourceRecordSetCount": 21
+            },
+            {
+                "CallerReference": "06a1fc06-f139-479b-b61b-f115302e130d",
+                "Config": {
+                    "Comment": "",
+                    "PrivateZone": false
+                },
+                "Id": "/hostedzone/Z099621627HY07FUO9ACG",
+                "Name": "geotest.kahoot-experimental.it.",
+                "ResourceRecordSetCount": 14
+            }
+        ],
+        "IsTruncated": false,
+        "MaxItems": "100",
+        "ResponseMetadata": {
+            "HTTPHeaders": {
+                "content-length": "1077",
+                "content-type": "text/xml",
+                "date": "Tue, 22 Mar 2022 13:18:00 GMT",
+                "x-amzn-requestid": "61554652-b58d-4918-9024-697e4eb51cf2"
+            },
+            "HTTPStatusCode": 200,
+            "RequestId": "61554652-b58d-4918-9024-697e4eb51cf2",
+            "RetryAttempts": 0
+        }
+    }
+    """
+    paginator = r53_client.get_paginator('list_hosted_zones')
+    hosted_zones = []
 
+    for page in paginator.paginate():
+        hosted_zones.extend(page['HostedZones'])
 
-def get_zone(con, zone_name, vpc):
+    list_private_zones = vpc is not None and vpc.get('is_private')
+    requested_vpc_id = vpc.get('id') if vpc else None
+    matching_zones = []
 
-    res = con.get_all_hosted_zones()
-    zones = res['ListHostedZonesResponse']['HostedZones']
-    zone_list = [z for z in zones
-                    if z['Config']['PrivateZone'] == (u'true' if vpc.get('is_private') else u'false')
-                        and z['Name'] == zone_name + '.']
+    for zone in hosted_zones:
+        is_private = zone['Config']['PrivateZone']
+        if zone['Name'] != zone_name + '.':
+            continue
 
-    for zone in zone_list:
-        data = {}
-        data['id'] = zone.get('Id','').replace('/hostedzone/', '')
-        data['name'] = zone.get('Name')
-        if vpc.get("is_private"):
-            z = con.get_hosted_zone(data.get('id'))
-            z_vpc_id = z.get('GetHostedZoneResponse',{}).get('VPCs',{}).get('VPC',{}).get('VPCId','')
-            if z_vpc_id == vpc.get('id'):
-                return data
-            else:
-                continue
-        else:
+        if (is_private and list_private_zones) \
+                or (not is_private and not list_private_zones):
+            matching_zones.append(zone)
+
+    for zone in matching_zones:
+        data = {
+            'id': zone.get('Id', '').replace('/hostedzone/', ''),
+            'name': zone.get('Name'),
+        }
+        if not list_private_zones:
+            return data
+
+        zone_id = data.get('id')
+        z = r53_client.get_hosted_zone(Id=zone_id)
+        # TODO validate
+        z_vpc_id = z.get('HostedZone', {}) \
+            .get('VPCs', {}) \
+            .get('VPC', {}) \
+            .get('VPCId', '')
+        if requested_vpc_id and z_vpc_id == requested_vpc_id:
             return data
     else:
         return None
 
 
-def create_zone(con, zone_name, vpc):
-    con.create_hosted_zone(domain_name=zone_name,
-                           private_zone=vpc.get('is_private'),
-                           vpc_region=vpc.get('region'),
-                           vpc_id=vpc.get('id'),
-                           comment='autogenerated by route53-transfer @ {}'.format(ts))
-    return get_zone(con, zone_name, vpc)
+def create_zone(r53_client, zone_name, vpc):
+    print('/// Create zone disabled ///')
+    ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", datetime.utcnow().utctimetuple())
+    # r53_client.create_hosted_zone(domain_name=zone_name,
+    #                              private_zone=vpc.get('is_private'),
+    #                              vpc_region=vpc.get('region'),
+    #                              vpc_id=vpc.get('id'),
+    #                              comment='autogenerated by route53-transfer @ {}'.format(ts))
+    # return get_zone(r53_client, zone_name, vpc)
+    return
 
 
-def inflate_csv_record(all_recs):
-    """
-    Converts a CSV zone record into a route53.record.Record instance
-
-    Example:
-
-        NAME,TYPE,VALUE,TTL,REGION,WEIGHT,SETID,FAILOVER,EVALUATE_HEALTH
-        db.example.com.,A,1.2.3.4,300,,,production-db,,
-
-    :param all_recs: All CSV records for a single resource
-    :return: Record
-    """
-    record = Record()
-
-    # List of CSV fields as parsed from a single line of a zone dump
-    csv_fields = all_recs[0]
-
-    record.name = csv_fields[0]
-    record.type = csv_fields[1]
-
-    if csv_fields[2].startswith('ALIAS'):
-        _, alias_hosted_zone_id, alias_dns_name = csv_fields[2].split(':')
-        record.alias_hosted_zone_id = alias_hosted_zone_id
-        record.alias_dns_name = alias_dns_name
-    else:
-        record.resource_records = [r[2] for r in all_recs]
-        record.ttl = csv_fields[3]
-
-    record.region = csv_fields[4] or None
-    record.weight = csv_fields[5] or None
-    record.identifier = csv_fields[6] or None
-    record.failover = csv_fields[7] or None
-
-    try:
-        if csv_fields[8] == 'True':
-            record.alias_evaluate_target_health = True
-        elif csv_fields[8] == 'False':
-            record.alias_evaluate_target_health = False
-        else:
-            record.alias_evaluate_target_health = None
-    except IndexError as e:
-        print("Invalid record: ", csv_fields)
-        raise e
-
-    return record
-
-
-def group_values(lines):
-    records = []
-    for _, records in itertools.groupby(lines, lambda row: row[0:2]):
-        for __, by_value in itertools.groupby(records, lambda row: row[-3:]):
-            recs = list(by_value)  # consume the iterator so we can grab positionally
-            record = inflate_csv_record(recs)
-
-            yield record
-
-
-def read_lines(file_in):
-    reader = csv.reader(file_in)
-    lines = list(reader)
-    if lines[0][0] == 'NAME':
-        lines = lines[1:]
-    return lines
-
-
-def read_records(file_in):
-    return list(group_values(read_lines(file_in)))
+def read_records(yaml_filename):
+    return yaml.safe_load(yaml_filename)
 
 
 def skip_apex_soa_ns(zone, records):
+    """
+    Name: kahoot-experimental-2703.com.
+    ResourceRecords:
+    - Value: ns-550.awsdns-04.net.
+    - Value: ns-1248.awsdns-28.org.
+    - Value: ns-176.awsdns-22.com.
+    - Value: ns-1929.awsdns-49.co.uk.
+    TTL: 172800
+    Type: NS
+    """
     for record in records:
-        if record.name == zone['name'] and record.type in ['SOA', 'NS']:
+        rec_name = record['Name']
+        rec_type = record['Type']
+        if rec_name == zone['name'] and rec_type in ('SOA', 'NS'):
             continue
         else:
             yield record
@@ -233,24 +256,32 @@ def get_file(filename, mode):
         return open(filename, mode)
 
 
-def load(con, zone_name, file_in, **kwargs):
-    ''' Send DNS records from input file to Route 53.
+def get_hosted_zone_record_sets(r53_client, zone_id):
+    paginator = r53_client.get_paginator('list_resource_record_sets')
+    resource_record_sets = []
+    for resource_record_set in paginator.paginate(HostedZoneId=zone_id):
+        resource_record_sets.extend(resource_record_set['ResourceRecordSets'])
+    return resource_record_sets
 
-        Arguments are Route53 connection, zone name, vpc info, and file to open for reading.
-    '''
+
+def load(r53, zone_name, file_in, **kwargs):
+    """
+    Send DNS records from input file to Route 53.
+
+    Arguments are Route53 connection, zone name, vpc info, and file to open for reading.
+    """
     dry_run = kwargs.get('dry_run', False)
     use_upsert = kwargs.get('use_upsert', False)
-
     vpc = kwargs.get('vpc', {})
 
-    zone = get_zone(con, zone_name, vpc)
+    zone = get_zone(r53, zone_name, vpc)
     if not zone:
         if dry_run:
             print('CREATE ZONE:', zone_name)
         else:
-            zone = create_zone(con, zone_name, vpc)
+            zone = create_zone(r53, zone_name, vpc)
 
-    existing_records = con.get_all_rrsets(zone['id'])
+    existing_records = get_hosted_zone_record_sets(r53, zone['id'])
     desired_records = read_records(file_in)
 
     changes = compute_changes(zone, existing_records, desired_records,
@@ -266,13 +297,12 @@ def load(con, zone_name, file_in, **kwargs):
 
         n = 1
         for update_batch in r53_update_batches:
-            rrsets = update_batch.to_rrsets(con, zone)
-            print(f"* Update batch {n} ({len(rrsets.changes)} changes)")
+            print(f"* Update batch {n} ({len(update_batch.changes)} changes)")
             if dry_run:
-                for change in rrsets.changes:
-                    print("    -", change[0], change[1])
+                for change in update_batch.changes:
+                    print("    -", change['operation'], change['change_dict'])
             else:
-                rrsets.commit()
+                update_batch.commit(r53, zone)
             n += 1
 
         print("Done.")
@@ -301,7 +331,7 @@ def assign_change_priority(zone: dict, change_operations: list) -> None:
 
     def is_alias(change: ComparableRecord) -> bool:
         record = change["record"]
-        return record.alias_dns_name is not None and is_same_zone(change)
+        return hasattr(record, 'alias_dns_name') and record.AliasDnsName is not None and is_same_zone(change)
 
     def is_new_alias(change: ComparableRecord) -> bool:
         return is_alias(change) and change["operation"] in ("CREATE", "UPSERT")
@@ -318,7 +348,7 @@ def assign_change_priority(zone: dict, change_operations: list) -> None:
 
     for change in change_operations:
         record = change["record"]
-        change["prio"] = rr_prio[record.name]
+        change["prio"] = rr_prio[record.Name]
 
 
 def changes_to_r53_updates(zone, change_operations):
@@ -386,18 +416,21 @@ def compute_changes(zone, existing_records, desired_records, use_upsert=False):
     existing_records = comparable(skip_apex_soa_ns(zone, existing_records))
     desired_records = comparable(skip_apex_soa_ns(zone, desired_records))
 
+    print("existing:", existing_records)
+    print("desired:", desired_records)
+
     to_delete = existing_records.difference(desired_records)
     to_add = desired_records.difference(existing_records)
     changes = list()
 
     def is_in_set(record: ComparableRecord, s: set) -> bool:
         for entry in s:
-            if entry.to_change_dict()["name"] == record.to_change_dict()["name"]:
+            if entry.to_change_dict()["Name"] == record.to_change_dict()["Name"]:
                 return True
         return False
 
     def sort_by_name(s: set):
-        return sorted(s, key=lambda comparable_record: comparable_record.name)
+        return sorted(s, key=lambda comparable_record: comparable_record.Name)
 
     if to_add or to_delete:
         for record in sort_by_name(to_add):
@@ -415,74 +448,57 @@ def compute_changes(zone, existing_records, desired_records, use_upsert=False):
     return changes
 
 
-def dump(con, zone_name, fout, **kwargs):
-    ''' Receive DNS records from Route 53 to output file.
+def dump(r53_client, zone_name, fout, **kwargs):
+    """
+    Receive DNS records from Route 53 to output file.
 
-        Arguments are Route53 connection, zone name, vpc info, and file to open for writing.
-    '''
+    Arguments are Route53 connection, zone name, vpc info, and file to open for writing.
+    """
     vpc = kwargs.get('vpc', {})
 
-    zone = get_zone(con, zone_name, vpc)
+    zone = get_zone(r53_client, zone_name, vpc)
     if not zone:
-        exit_with_error("ERROR: {} zone {} not found!".format('Private' if vpc.get('is_private') else 'Public',
-                                                              zone_name))
+        exit_with_error("ERROR: {} zone {} not found!".format(
+            'Private' if vpc.get('is_private') else 'Public',
+            zone_name))
 
-    out = csv.writer(fout)
-    out.writerow(['NAME', 'TYPE', 'VALUE', 'TTL', 'REGION', 'WEIGHT', 'SETID', 'FAILOVER', "EVALUATE_HEALTH"])
-
-    records = list(con.get_all_rrsets(zone['id']))
-    for r in records:
-        lines = record_to_stringlist(r)
-        for line in lines:
-            out.writerow(line)
+    records = get_hosted_zone_record_sets(r53_client, zone['id'])
+    yaml.safe_dump(records, fout)
 
     fout.flush()
 
 
-def record_to_stringlist(r: Record) -> list:
-    out_lines = []
-
-    if r.alias_dns_name:
-        vals = [':'.join(['ALIAS', r.alias_hosted_zone_id, r.alias_dns_name])]
-    else:
-        vals = r.resource_records
-
-    for val in vals:
-        out_lines.append([
-            r.name, r.type, val, r.ttl, r.region, r.weight, r.identifier,
-            r.failover, r.alias_evaluate_target_health])
-
-    return out_lines
-
-
-def record_short_summary(r: Record) -> str:
-    """
-    Given a R53 resource record, returns a short string summary of it.
-
-    Used when showing what records would be created, modified or deleted
-    in a dry-run execution.
-
-    :param r: R53 resource record
-    :return: short summary string of the input record
-    """
-    if r.alias_dns_name:
-        return f"{r.name} {r.type} ALIAS:{r.alias_hosted_zone_id}:{r.alias_dns_name} {r.ttl}"
-    else:
-        return f"{r.name} {r.type} {r.resource_records} {r.ttl}"
-
-
-def up_to_s3(con, file, s3_bucket):
-    con.create_bucket(s3_bucket)
-    bucket = con.get_bucket(s3_bucket)
-    bucket_key = Key(bucket)
-    bucket_key.key = file
-    bucket_key.set_contents_from_filename(file, num_cb=10)
+"""
+DelegationSet:
+  NameServers:
+  - ns-1864.awsdns-41.co.uk
+  - ns-1525.awsdns-62.org
+  - ns-864.awsdns-44.net
+  - ns-28.awsdns-03.com
+HostedZone:
+  CallerReference: 06a1fc06-f139-479b-b61b-f115302e130d
+  Config:
+    Comment: ''
+    PrivateZone: false
+  Id: /hostedzone/Z099621627HY07FUO9ACG
+  Name: geotest.kahoot-experimental.it.
+  ResourceRecordSetCount: 14
+ResponseMetadata:
+  HTTPHeaders:
+    content-length: '665'
+    content-type: text/xml
+    date: Tue, 22 Mar 2022 14:35:43 GMT
+    x-amzn-requestid: af722f7d-7e79-47ca-8922-3691913dc78a
+  HTTPStatusCode: 200
+  RequestId: af722f7d-7e79-47ca-8922-3691913dc78a
+  RetryAttempts: 0
+"""
+# print(yaml.safe_dump(r53_client.get_hosted_zone(Id='Z099621627HY07FUO9ACG')))
 
 
 def run(params):
-    access_key, secret_key = get_aws_credentials(params)
-    con = route53.connect_to_region('universal', aws_access_key_id=access_key, aws_secret_access_key=secret_key)
-    con_s3 = connect_s3(aws_access_key_id=access_key, aws_secret_access_key=secret_key)
+    r53_client = boto3.client('route53')
+    s3_client = boto3.client('s3')
     zone_name = params['<zone>']
     filename = params['<file>']
 
@@ -498,15 +514,17 @@ def run(params):
         vpc['is_private'] = False
 
     if params.get('dump'):
-        dump(con, zone_name, get_file(filename, 'w'), vpc=vpc)
+        dump(r53_client, zone_name, get_file(filename, 'w'), vpc=vpc)
         if params.get('--s3-bucket'):
-            up_to_s3(con_s3, params.get('<file>'), params.get('--s3-bucket'))
+            # TODO
+            #up_to_s3(s3_client, params.get('<file>'), params.get('--s3-bucket'))
+            pass
 
     elif params.get('load'):
         dry_run = params.get('--dry-run', False)
         use_upsert = params.get('--use-upsert', False)
 
-        load(con, zone_name, get_file(filename, 'r'), vpc=vpc,
+        load(r53_client, zone_name, get_file(filename, 'r'), vpc=vpc,
              dry_run=dry_run, use_upsert=use_upsert)
     else:
         return 1
