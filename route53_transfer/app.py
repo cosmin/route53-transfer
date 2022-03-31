@@ -3,58 +3,13 @@ from collections import defaultdict
 
 import sys
 import time
-import yaml
 from datetime import datetime
 from os import environ
 
 import boto3
 
-
-class ChangeBatch:
-    """
-    Represents a single batch/transaction of changes to Route53
-
-    Having such a class simplifies the handling of the change operations as
-    we can use `ChangeBatch.add_change()` passing the change operation dict
-    as it was returned by `compute_changes()`.
-    """
-    def __init__(self):
-        self._changes = []
-
-    @property
-    def changes(self):
-        return self._changes
-
-    def add_change(self, change_operation):
-        record = change_operation["record"]
-        change = dict()
-        change["operation"] = change_operation["operation"]
-        change["change_dict"] = {**record.__dict__}
-        self._changes.append(change)
-
-    def commit(self, r53, zone):
-        """
-        Commit the current ChangeBatch to Route53 in a single transaction
-        """
-        def change_to_rrset(change):
-            return {'Action': change["operation"],
-                    'ResourceRecordSet': {**change["change_dict"]}}
-
-        try:
-            changes_list = list(map(change_to_rrset, self.changes))
-            print("changes_list:", changes_list)
-
-            response = r53.change_resource_record_sets(
-                HostedZoneId=zone['id'],
-                ChangeBatch={
-                    'Comment': 'route53-transfer load operation',
-                    'Changes': changes_list,
-                })
-            print(response)
-            return True
-        # TODO : catch specific exceptions
-        except Exception as error:
-            print("Exception :" + str(error))
+from route53_transfer.serialization import read_records, write_records
+from route53_transfer.change_batch import ChangeBatch
 
 
 class ComparableRecord:
@@ -212,10 +167,6 @@ def create_zone(r53_client, zone_name, vpc):
     return
 
 
-def read_records(yaml_filename):
-    return yaml.safe_load(yaml_filename)
-
-
 def skip_apex_soa_ns(zone, records):
     """
     Name: kahoot-experimental-2703.com.
@@ -287,27 +238,26 @@ def load(r53, zone_name, file_in, **kwargs):
     changes = compute_changes(zone, existing_records, desired_records,
                               use_upsert=use_upsert)
 
-    r53_update_batches = changes_to_r53_updates(zone, changes)
-    if r53_update_batches:
+    if dry_run:
+        print("Dry-run requested. No changes are going to be applied")
+    else:
+        print("Applying changes...")
 
+    n = 1
+    for update_batch in changes_to_r53_updates(zone, changes):
+
+        print(f"* Update batch {n} ({len(update_batch.changes)} changes)")
         if dry_run:
-            print("Dry-run requested. No changes are going to be applied")
+            for change in update_batch.changes:
+                print("    -", change['operation'], change['change_dict'])
         else:
-            print("Applying changes...")
+            update_batch.commit(r53, zone)
+        n += 1
 
-        n = 1
-        for update_batch in r53_update_batches:
-            print(f"* Update batch {n} ({len(update_batch.changes)} changes)")
-            if dry_run:
-                for change in update_batch.changes:
-                    print("    -", change['operation'], change['change_dict'])
-            else:
-                update_batch.commit(r53, zone)
-            n += 1
-
-        print("Done.")
     else:
         print("No changes.")
+
+    print("Done.")
 
 
 def assign_change_priority(zone: dict, change_operations: list) -> None:
@@ -448,7 +398,7 @@ def compute_changes(zone, existing_records, desired_records, use_upsert=False):
     return changes
 
 
-def dump(r53_client, zone_name, fout, **kwargs):
+def dump(r53_client, zone_name, output_file, **kwargs):
     """
     Receive DNS records from Route 53 to output file.
 
@@ -463,9 +413,9 @@ def dump(r53_client, zone_name, fout, **kwargs):
             zone_name))
 
     records = get_hosted_zone_record_sets(r53_client, zone['id'])
-    yaml.safe_dump(records, fout)
 
-    fout.flush()
+    output_file.write(write_records(records, format='yaml'))
+    output_file.flush()
 
 
 """
@@ -498,7 +448,6 @@ ResponseMetadata:
 
 def run(params):
     r53_client = boto3.client('route53')
-    s3_client = boto3.client('s3')
     zone_name = params['<zone>']
     filename = params['<file>']
 
@@ -517,7 +466,8 @@ def run(params):
         dump(r53_client, zone_name, get_file(filename, 'w'), vpc=vpc)
         if params.get('--s3-bucket'):
             # TODO
-            #up_to_s3(s3_client, params.get('<file>'), params.get('--s3-bucket'))
+            # s3_client = boto3.client('s3')
+            # up_to_s3(s3_client, params.get('<file>'), params.get('--s3-bucket'))
             pass
 
     elif params.get('load'):
