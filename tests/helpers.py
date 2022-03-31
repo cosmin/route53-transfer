@@ -4,6 +4,10 @@ Helper and custom assert methods to test dns zone updates
 
 from route53_transfer import app
 from route53_transfer.app import ComparableRecord
+from route53_transfer.serialization import read_records
+
+from pathlib import Path
+
 
 TEST_ZONE_ID = 1
 TEST_ZONE_NAME = "test.dev"
@@ -71,3 +75,21 @@ def assert_changes_eq(cl1: list, cl2: list):
     for i in range(len(cl1)):
         assert_change_eq(cl1[i], cl2[i])
 
+
+def load_fixture(fixture_filename):
+    """
+    Load a fixture file with test records from disk
+
+    :param fixture_filename: The filename of the fixture to load, relative to
+        the fixtures directory. The format is automatically detected.
+    :return: A list of route53 records, each a simple dictionary
+    """
+    fixture_path = Path(__file__).parent / "fixtures" / fixture_filename
+    fixture_format = "json" if fixture_filename.endswith(".json") else ".yaml"
+
+    with open(fixture_path, "rb") as fixture_file:
+        return read_records(fixture_file, format=fixture_format)
+
+
+def fixtures_for(test_name):
+    return test_name + ".yaml", test_name + ".json"

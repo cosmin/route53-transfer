@@ -1,0 +1,12 @@
+[
+  {
+    "Name": "test1.example.com.",
+    "ResourceRecords": [
+      {
+        "Value": "127.0.0.99"
+      }
+    ],
+    "TTL": 65,
+    "Type": "A"
+  }
+]
