@@ -1,3 +1,4 @@
+pyyaml>=5.4.1
 boto3
 pydantic
 docopt>=0.5.0
