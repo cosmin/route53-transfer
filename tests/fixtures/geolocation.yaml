@@ -1,0 +1,23 @@
+- Name: geo1.example.com.
+  Type: A
+  GeoLocation:
+    CountryCode: '*'
+  SetIdentifier: rp-geo-default
+  ResourceRecords:
+    - Value: 127.0.0.2
+
+- Name: geo2.example.com.
+  Type: A
+  GeoLocation:
+    CountryCode: SE
+  SetIdentifier: rp-geo-se
+  ResourceRecords:
+    - Value: 127.0.0.3
+
+- Name: geo3.example.com.
+  Type: A
+  GeoLocation:
+    ContinentCode: AF
+  SetIdentifier: rp-geo-africa
+  ResourceRecords:
+    - Value: 127.0.0.4
