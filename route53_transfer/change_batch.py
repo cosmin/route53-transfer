@@ -15,20 +15,17 @@ class ChangeBatch:
     def changes(self):
         return self._changes
 
-    def add_change(self, change_operation):
-        record = change_operation["record"]
-        change = dict()
-        change["operation"] = change_operation["operation"]
-        change["change_dict"] = {**record.__dict__}
-        self._changes.append(change)
+    def add_change(self, change_operation: dict) -> None:
+        self._changes.append(change_operation)
 
     def commit(self, r53, zone):
         """
         Commit the current ChangeBatch to Route53 in a single transaction
         """
         def change_to_rrset(change):
-            return {'Action': change["operation"],
-                    'ResourceRecordSet': {**change["change_dict"]}}
+            rrset_dict = change["record"].dict(exclude_none=True)
+            return {"Action": change["operation"],
+                    "ResourceRecordSet": {**rrset_dict}}
 
         try:
             changes_list = list(map(change_to_rrset, self.changes))

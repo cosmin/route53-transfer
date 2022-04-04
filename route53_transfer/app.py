@@ -8,57 +8,9 @@ from os import environ
 
 import boto3
 
+from route53_transfer.models import R53Record
 from route53_transfer.serialization import read_records, write_records
 from route53_transfer.change_batch import ChangeBatch
-
-
-class ComparableRecord:
-    def __init__(self, obj):
-        print(obj)
-        for k, v in obj.items():
-            self.__dict__[k] = v
-
-    def __eq__(self, other):
-        return self.__dict__ == other.__dict__
-
-    def __hash__(self):
-        # TODO massively incomplete
-        it = (self.Name, self.Type,  # self.alias_hosted_zone_id,
-              #self.alias_dns_name, tuple(sorted(self.resource_records)),
-              tuple(sorted(map(lambda r: r['Value'], self.ResourceRecords))),
-              self.TTL,
-              #self.ttl, self.region, self.weight, self.identifier,
-              #self.failover, self.alias_evaluate_target_health)
-              )
-        return it.__hash__()
-
-    def to_change_dict(self):
-        # TODO massively incomplete and a mess
-        data = {}
-        for k, v in self.__dict__.items():
-            if k == 'ResourceRecords':
-                continue
-            elif k == 'Name':
-                data['name'] = v
-            elif k == 'TTL':
-                data['ttl'] = v
-            elif k == 'Id':
-                data['id'] = v
-            elif k == 'Type':
-                data['type'] = v
-            else:
-                data[k] = v
-        return data
-
-    def __repr__(self):
-        rr = " ".join(map(lambda r: r['Value'], self.ResourceRecords))
-        extra_info = f"{self.TTL}:{rr}"
-
-        if hasattr(self, 'AliasDnsName') and self.AliasDnsName:
-            extra_info = f"ALIAS {self.alias_hosted_zone_id} {self.alias_dns_name} " \
-                         f"(EvalTarget {self.alias_evaluate_target_health})"
-
-        return f"<ComparableRecord:{self.Name}:{self.Type}:{extra_info}>"
 
 
 def exit_with_error(error):
@@ -178,17 +130,15 @@ def skip_apex_soa_ns(zone, records):
     TTL: 172800
     Type: NS
     """
+    desired_zone_name = zone['name']
+
     for record in records:
-        rec_name = record['Name']
-        rec_type = record['Type']
-        if rec_name == zone['name'] and rec_type in ('SOA', 'NS'):
+        rec_name = record.Name
+        rec_type = record.Type
+        if rec_name == desired_zone_name and rec_type in ('SOA', 'NS'):
             continue
         else:
             yield record
-
-
-def comparable(records):
-    return {ComparableRecord(record) for record in records}
 
 
 def get_file(filename, mode):
@@ -212,7 +162,8 @@ def get_hosted_zone_record_sets(r53_client, zone_id):
     resource_record_sets = []
     for resource_record_set in paginator.paginate(HostedZoneId=zone_id):
         resource_record_sets.extend(resource_record_set['ResourceRecordSets'])
-    return resource_record_sets
+
+    return list(map(R53Record.from_dict, resource_record_sets))
 
 
 def load(r53, zone_name, file_in, **kwargs):
@@ -229,6 +180,7 @@ def load(r53, zone_name, file_in, **kwargs):
     if not zone:
         if dry_run:
             print('CREATE ZONE:', zone_name)
+            zone = {'name': zone_name, 'id': 'fake-zone-id'}
         else:
             zone = create_zone(r53, zone_name, vpc)
 
@@ -249,7 +201,7 @@ def load(r53, zone_name, file_in, **kwargs):
         print(f"* Update batch {n} ({len(update_batch.changes)} changes)")
         if dry_run:
             for change in update_batch.changes:
-                print("    -", change['operation'], change['change_dict'])
+                print("    -", change['operation'], change['record'])
         else:
             update_batch.commit(r53, zone)
         n += 1
@@ -279,25 +231,25 @@ def assign_change_priority(zone: dict, change_operations: list) -> None:
     def is_same_zone(change: dict) -> bool:
         return change["zone"]["id"] == zone["id"]
 
-    def is_alias(change: ComparableRecord) -> bool:
-        record = change["record"]
-        return hasattr(record, 'alias_dns_name') and record.AliasDnsName is not None and is_same_zone(change)
+    def is_alias(change) -> bool:
+        record: R53Record = change["record"]
+        return record.is_alias() and is_same_zone(change)
 
-    def is_new_alias(change: ComparableRecord) -> bool:
+    def is_new_alias(change) -> bool:
         return is_alias(change) and change["operation"] in ("CREATE", "UPSERT")
 
     for change in change_operations:
         if is_new_alias(change):
-            record = change["record"]
-            rr_prio[record.alias_dns_name] += 1
+            record: R53Record = change["record"]
+            rr_prio[record.AliasTarget.DNSName] += 1
 
     for change in change_operations:
         if is_new_alias(change):
-            record = change["record"]
-            rr_prio[record.alias_dns_name] += rr_prio[record.name]
+            record: R53Record = change["record"]
+            rr_prio[record.AliasTarget.DNSName] += rr_prio[record.Name]
 
     for change in change_operations:
-        record = change["record"]
+        record: R53Record = change["record"]
         change["prio"] = rr_prio[record.Name]
 
 
@@ -363,24 +315,24 @@ def compute_changes(zone, existing_records, desired_records, use_upsert=False):
     :return: list of ResourceRecordSet changes to be applied
     """
 
-    existing_records = comparable(skip_apex_soa_ns(zone, existing_records))
-    desired_records = comparable(skip_apex_soa_ns(zone, desired_records))
+    existing_records = frozenset(skip_apex_soa_ns(zone, existing_records))
+    desired_records = frozenset(skip_apex_soa_ns(zone, desired_records))
 
-    print("existing:", existing_records)
-    print("desired:", desired_records)
+    # print("existing:", existing_records)
+    # print("desired:", desired_records)
 
     to_delete = existing_records.difference(desired_records)
     to_add = desired_records.difference(existing_records)
     changes = list()
 
-    def is_in_set(record: ComparableRecord, s: set) -> bool:
+    def is_in_set(record: R53Record, s: set) -> bool:
         for entry in s:
-            if entry.to_change_dict()["Name"] == record.to_change_dict()["Name"]:
+            if entry.Name == record.Name:
                 return True
         return False
 
     def sort_by_name(s: set):
-        return sorted(s, key=lambda comparable_record: comparable_record.Name)
+        return sorted(s, key=lambda r: r.Name)
 
     if to_add or to_delete:
         for record in sort_by_name(to_add):
