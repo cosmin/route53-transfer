@@ -3,7 +3,6 @@ Helper and custom assert methods to test dns zone updates
 """
 
 from route53_transfer import app
-from route53_transfer.app import ComparableRecord
 from route53_transfer.serialization import read_records
 
 from pathlib import Path
@@ -23,10 +22,6 @@ def diff_zone_upsert(rrset_before, rrset_after):
     return diff_zone(rrset_before, rrset_after, use_upsert=True)
 
 
-def to_comparable(r):
-    return r if type(r) == ComparableRecord else ComparableRecord(r)
-
-
 def assert_change_eq(c1: dict, c2: dict):
     assert c1["operation"] == c2["operation"], \
         f"Expected operation type to be {c2['operation']} but was {c1['operation']}"
@@ -37,28 +32,16 @@ def assert_change_eq(c1: dict, c2: dict):
     assert c1["zone"]["name"] == c2["zone"]["name"], \
         f"Expected zone name to be {c2['zone']['name']} but was {c1['zone']['name']}"
 
-    c1_record = to_comparable(c1["record"])
-    c2_record = to_comparable(c2["record"])
-
-    assert_record_eq(c1_record, c2_record)
-
-
-def assert_record_eq(r1, r2):
-    rd1 = r1.to_change_dict()
-    rd2 = r2.to_change_dict()
-
-    for attr in ("type", "name", "ttl", "alias_hosted_zone_id",
-                 "alias_dns_name", "identifier", "weight", "region",
-                 "alias_evaluate_target_health", "health_check", "failover"):
-        assert rd1[attr] == rd2[attr], \
-            f"Expected record {attr} to be '{rd2[attr]}' but was '{rd1[attr]}'"
-
-    assert_resource_records_eq(r1, r2)
+    assert c1["record"] == c2["record"]
+    assert c1["record"].__hash__() == c2["record"].__hash__()
 
 
 def assert_resource_records_eq(r1, r2):
-    rr1 = r1.resource_records
-    rr2 = r2.resource_records
+    rr1 = r1.ResourceRecords
+    rr2 = r2.ResourceRecords
+
+    if rr1 is None and rr2 is None:
+        return
 
     assert len(rr1) == len(rr2), \
         f"Expected resource_records length to be the same, but was {len(rr1)} instead of {len(rr2)}"
